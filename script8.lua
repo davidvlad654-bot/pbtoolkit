@@ -5215,14 +5215,16 @@ task.spawn(function()
     ------------------------------------------------------------------
     local TeleportService = game:GetService("TeleportService")
     local CYC_FILE = "PvBCycle.json"
-    local cyc = { on=false, fishTarget=1250, dataTargetMB=4.01, seed="Mango", runs=0, trolls=0, tornado=true, captureAll=false }
+    local cyc = { on=false, fishTarget=1250, dataTargetMB=4.00, seed="Mango", runs=0, trolls=0, tornado=true, captureAll=false }
     pcall(function()
         if isfile and isfile(CYC_FILE) then
             local d=HttpService:JSONDecode(readfile(CYC_FILE))
             if type(d)=="table" then for k,v in pairs(d) do cyc[k]=v end end
         end
     end)
-    if cyc.dataTargetMB==4.05 then cyc.dataTargetMB=4.01 end  -- migrate stale saved default
+    -- migrate old saved targets: PvBCycle.json overrides the default above,
+    -- so without this an existing save would keep the old value forever
+    if cyc.dataTargetMB==4.05 or cyc.dataTargetMB==4.01 then cyc.dataTargetMB=4.00 end
     if getgenv().PvBIsMain then cyc.on=false end   -- main account never auto-arms the cycle
     local function cycSave() pcall(function() if writefile then writefile(CYC_FILE, HttpService:JSONEncode(cyc)) end end) end
     cycSave()
@@ -5374,18 +5376,18 @@ task.spawn(function()
             if ok2 and j then return #j/1048576 end
             return nil
         end
-        local tgt = tonumber(cyc.dataTargetMB) or 4.01
+        local tgt = tonumber(cyc.dataTargetMB) or 4.00
         while cycGate() do
             local mb=dataMB()
             if mb then
-                cycLbl.Text=("fishing: %.2f / %.2f MB"):format(mb, tgt)
+                cycLbl.Text=("fishing: %.2f / %.2f MB"):format(math.floor(mb*100)/100, tgt)
                 if mb>=tgt then break end
             else
                 -- size unreadable: fall back to the old item-count target
                 cycLbl.Text=("fishing: %d items (size read failed)"):format(bagCount())
                 if bagCount()>=(tonumber(cyc.fishTarget) or 1250) then break end
             end
-            task.wait(3)
+            task.wait(1)
         end
         getgenv().PvBAutoFish=false
         pcall(function() rfFish() end)
@@ -5537,16 +5539,10 @@ task.spawn(function()
         end
         local troll=scanTrolls(false)
 
-        -- eyeball window: keeps rescanning so a late-registering troll flips the verdict
-        for i=8,1,-1 do
-            if not cycGate() then return end
-            if not troll and scanTrolls(true) then
-                troll=true
-                cycLog("late-registered troll caught on rescan (t-%ds)", i)
-            end
-            cycLbl.Text=(troll and "MUTATED TROLL FOUND - acting in %ds" or "no qualifying troll - hopping in %ds"):format(i)
-            task.wait(1)
-        end
+        -- No countdown. The settle step above already waited for every seed to
+        -- finish converting into a plant, so one immediate rescan is enough to
+        -- catch a troll whose attributes landed a beat late.
+        if not cycGate() then return end
         if not troll and scanTrolls(true) then
             troll=true
             cycLog("last-moment troll caught on final rescan")
@@ -5589,8 +5585,10 @@ task.spawn(function()
             -- 4d) sell all plants (hearted are protected)
             cycLbl.Text="selling plants..."
             pcall(function() getgenv().PvBFireSell(nil, true) end)
-            task.wait(3)
-            -- 4e) make sure a Cactus plant is in the bag for next run's tornado
+            -- 4e) a Cactus is only needed to feed the NEXT run's tornado step, so
+            -- skip all of this when that step is turned off
+            if cyc.tornado ~= false then
+            task.wait(3)   -- let the sell land, or the old cactus still looks present
             if not haveCactusPlant() then
                 cycLbl.Text="replacing cactus..."
                 if P.setSeed("Cactus") then
@@ -5604,13 +5602,22 @@ task.spawn(function()
                     task.wait(2)
                 end
             end
-            -- 4f) settle, then wait for the bag to drain under the cap
-            cycLbl.Text="settling 30s..."
-            for _=1,30 do if not cycGate() then return end task.wait(1) end
+            end
+            -- 4f) leave the instant save data is back under the cap. That is the
+            -- only thing that matters: under the cap means the leave-save goes
+            -- through and the hearted troll is kept. No fixed settle time.
             local t2=os.clock()
-            while cycGate() and bagCount()>bagMax() and os.clock()-t2<90 do
-                cycLbl.Text=("bag %d/%d - draining..."):format(bagCount(), bagMax())
-                task.wait(1)
+            while cycGate() and os.clock()-t2<120 do
+                local mb=dataMB()
+                if mb then
+                    if mb<tgt then cycLog("data %.3f MB - under cap, leaving", mb) break end
+                    cycLbl.Text=("saving: %.2f / %.2f MB - waiting to drop under"):format(math.floor(mb*100)/100, tgt)
+                elseif bagCount()<=bagMax() then
+                    break   -- size unreadable: fall back to the old bag-count rule
+                else
+                    cycLbl.Text=("bag %d/%d - draining..."):format(bagCount(), bagMax())
+                end
+                task.wait(0.5)
             end
         end
         if not cycGate() then return end

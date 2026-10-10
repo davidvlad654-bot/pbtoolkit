@@ -199,7 +199,9 @@ task.spawn(function()
             mb = #HS:JSONEncode(d) / 1024 / 1024
         end)
         if mb then
-            sizeLabel.Text = ("%.2f / 4 MB"):format(mb)
+            -- truncate, never round: rounding showed "4.00" from 3.995 up, while
+            -- the cycle (correctly) kept fishing until the real 4.00 save cap
+            sizeLabel.Text = ("%.2f / 4 MB"):format(math.floor(mb*100)/100)
             local pct = mb / 4
             sizeLabel.TextColor3 = (pct >= 0.9 and C.red) or (pct >= 0.75 and Color3.fromRGB(230,160,60)) or C.dim
         else
@@ -5370,7 +5372,10 @@ task.spawn(function()
         getgenv().PvBAutoFish = true
         pcall(function() rfFish() end)
         local function dataMB()
-            local ok,d=pcall(function() return require(RS:WaitForChild("PlayerData")):GetData().Data end)
+            local ok,d=pcall(function()
+                local g=require(RS:WaitForChild("PlayerData")):GetData()
+                return g and (g.Data or g)
+            end)
             if not (ok and d) then return nil end
             local ok2,j=pcall(function() return HttpService:JSONEncode(d) end)
             if ok2 and j then return #j/1048576 end
@@ -5385,13 +5390,14 @@ task.spawn(function()
             else
                 -- size unreadable: fall back to the old item-count target
                 cycLbl.Text=("fishing: %d items (size read failed)"):format(bagCount())
-                if bagCount()>=(tonumber(cyc.fishTarget) or 1250) then break end
+                if bagCount()>=(tonumber(cyc.fishTarget) or 1250) or bagCount()>=bagMax() then break end
             end
             task.wait(1)
         end
         getgenv().PvBAutoFish=false
         pcall(function() rfFish() end)
         restoreFish()
+        do local m=dataMB() cycLog("fishing stopped at %s MB (target %.2f)", m and ("%.3f"):format(m) or "n/a", tgt) end
         if not cycGate() then return end
 
         -- 3) plant a full garden of mango, water it, leave it in the ground
